@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Facebook RSS Feeds</title>
+    <meta name="description" content="RSS feeds for Facebook pages">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1e40af;
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --text-light: #f1f5f9;
+            --text-gray: #94a3b8;
+            --success: #10b981;
+            --border: #334155;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: var(--text-light);
+            min-height: 100vh;
+            padding: 2rem 1rem;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            animation: fadeInDown 0.6s ease;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            color: var(--text-gray);
+            font-size: 1rem;
+        }
+
+        .feeds-grid {
+            display: grid;
+            gap: 1.5rem;
+            animation: fadeInUp 0.6s ease;
+        }
+
+        .feed-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .feed-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary) 0%, #8b5cf6 100%);
+            transform: scaleX(0);
+            transition: transform 0.3s ease;
+        }
+
+        .feed-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 40px rgba(59, 130, 246, 0.2);
+            border-color: var(--primary);
+        }
+
+        .feed-card:hover::before {
+            transform: scaleX(1);
+        }
+
+        .feed-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .feed-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--primary) 0%, #8b5cf6 100%);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+
+        .feed-name {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-light);
+        }
+
+        .feed-url-container {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+        }
+
+        .feed-url {
+            flex: 1;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.875rem;
+            color: var(--text-gray);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.25rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            white-space: nowrap;
+        }
+
+        .btn:hover {
+            background: var(--primary-dark);
+            transform: scale(1.05);
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn.copied {
+            background: var(--success);
+        }
+
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-gray);
+        }
+
+        .error {
+            background: #7f1d1d;
+            border: 1px solid #991b1b;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+            text-align: center;
+        }
+
+        .spinner {
+            border: 3px solid var(--border);
+            border-top: 3px solid var(--primary);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @media (max-width: 640px) {
+            h1 {
+                font-size: 2rem;
+            }
+
+            .feed-url-container {
+                flex-direction: column;
+            }
+
+            .btn {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📡 Facebook RSS Feeds</h1>
+            <p class="subtitle">Subscribe to your favorite Facebook pages via RSS</p>
+        </header>
+
+        <div id="feeds-container">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Loading feeds...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const GITHUB_USERNAME = 'thesiddikhamim';
+        const REPO_NAME = 'fb-scraper';
+        const BASE_URL = `https://${GITHUB_USERNAME}.github.io/${REPO_NAME}/feeds/`;
+
+        async function loadFeeds() {
+            const container = document.getElementById('feeds-container');
+            
+            try {
+                const response = await fetch('accounts.json');
+                if (!response.ok) {
+                    throw new Error('Failed to load accounts.json');
+                }
+                
+                const accounts = await response.json();
+                
+                if (accounts.length === 0) {
+                    container.innerHTML = '<div class="error">No feeds configured yet.</div>';
+                    return;
+                }
+
+                const feedsGrid = document.createElement('div');
+                feedsGrid.className = 'feeds-grid';
+
+                accounts.forEach((account, index) => {
+                    const feedUrl = `${BASE_URL}${account.filename}.xml`;
+                    
+                    const card = document.createElement('div');
+                    card.className = 'feed-card';
+                    card.style.animationDelay = `${index * 0.1}s`;
+                    
+                    card.innerHTML = `
+                        <div class="feed-header">
+                            <div class="feed-icon">📰</div>
+                            <div class="feed-name">${account.name}</div>
+                        </div>
+                        <div class="feed-url-container">
+                            <div class="feed-url" title="${feedUrl}">${feedUrl}</div>
+                            <button class="btn" onclick="copyToClipboard('${feedUrl}', this)">
+                                <span>📋</span>
+                                <span class="btn-text">Copy</span>
+                            </button>
+                        </div>
+                    `;
+                    
+                    feedsGrid.appendChild(card);
+                });
+
+                container.innerHTML = '';
+                container.appendChild(feedsGrid);
+                
+            } catch (error) {
+                console.error('Error loading feeds:', error);
+                container.innerHTML = `
+                    <div class="error">
+                        <strong>Error:</strong> ${error.message}
+                        <br><br>
+                        Make sure accounts.json exists and is properly formatted.
+                    </div>
+                `;
+            }
+        }
+
+        async function copyToClipboard(text, button) {
+            try {
+                await navigator.clipboard.writeText(text);
+                const btnText = button.querySelector('.btn-text');
+                const originalText = btnText.textContent;
+                
+                button.classList.add('copied');
+                btnText.textContent = 'Copied!';
+                
+                setTimeout(() => {
+                    button.classList.remove('copied');
+                    btnText.textContent = originalText;
+                }, 2000);
+                
+            } catch (error) {
+                console.error('Failed to copy:', error);
+                alert('Failed to copy to clipboard');
+            }
+        }
+
+        // Load feeds when page loads
+        loadFeeds();
+    </script>
+</body>
+</html>
