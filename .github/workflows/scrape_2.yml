@@ -1,0 +1,59 @@
+name: Update RSS Feed - Group 2
+
+on:
+  # Run on a schedule (cron syntax: minute hour day month day-of-week)
+  schedule:
+    # Run every 6 hours, offset by 3 hours from Group 1 (03:00, 09:00, 15:00, 21:00 UTC)
+    - cron: '0 3,9,15,21 * * *'
+  
+  # Allow manual triggering from GitHub Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2t64 libgbm1 libnspr4 libnss3 libxss1 libxtst6 xdg-utils fonts-liberation libatk-bridge2.0-0 libgtk-3-0
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install playwright
+          playwright install chromium
+      
+      - name: Run scraper
+        run: python main.py accounts_2.json
+      
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-artifacts-2
+          path: |
+            debug_screenshot.png
+            debug_html.html
+            debug_error.png
+          if-no-files-found: ignore
+      
+      - name: Commit and push if changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add cache/ feeds/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update RSS feed (Group 2) - $(date -u +'%Y-%m-%d %H:%M:%S UTC')" && git push)

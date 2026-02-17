@@ -1,4 +1,4 @@
-name: Update RSS Feed
+name: Update RSS Feed - Group 1
 
 on:
   # Run on a schedule (cron syntax: minute hour day month day-of-week)
@@ -43,7 +43,7 @@ jobs:
           playwright install chromium
       
       - name: Run scraper
-        run: python main.py
+        run: python main.py accounts_1.json
       
       - name: Upload debug artifacts
         if: always()

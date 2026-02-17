@@ -1,4 +1,6 @@
 import asyncio
+import sys
+
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from feedgen.feed import FeedGenerator
 from datetime import datetime, timezone, timedelta
@@ -534,15 +536,19 @@ def generate_rss(posts, page_name, page_url, output='feed.xml'):
 
 async def main():
     # Load accounts from JSON file
-    # filename: used for both the XML feed (filename.xml) and cache (filename_cache.json)
+    # Default to accounts.json, but allow overriding via command line
+    accounts_file = 'accounts.json'
+    if len(sys.argv) > 1:
+        accounts_file = sys.argv[1]
+    
     try:
-        with open('accounts.json', 'r', encoding='utf-8') as f:
+        with open(accounts_file, 'r', encoding='utf-8') as f:
             ACCOUNTS = json.load(f)
     except FileNotFoundError:
-        print("Error: accounts.json not found. Please create it with your account configurations.")
+        print(f"Error: {accounts_file} not found.")
         return
     except json.JSONDecodeError as e:
-        print(f"Error parsing accounts.json: {e}")
+        print(f"Error parsing {accounts_file}: {e}")
         return
     
     # Create directories if they don't exist
