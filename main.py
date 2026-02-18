@@ -1,6 +1,5 @@
 import asyncio
 import sys
-import subprocess
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from feedgen.feed import FeedGenerator
@@ -367,151 +366,40 @@ class FacebookScraper:
                             href = f"https://www.facebook.com{href}"
                         link = href.split('?')[0]
 
-                # 3. Extract Image & Video
+                # 3. Extract Image
                 image_url = None
-                video_url = None
-                media_type = None  # 'video', 'image', or None
                 try:
-                    # --- VIDEO DETECTION ---
-                    video_element = await article.query_selector('video')
-                    if video_element:
-                        media_type = 'video'
-                        
-                        # Step 1: Find video ID from links within this article
-                        video_id = await article.evaluate("""(article) => {
-                            const links = Array.from(article.querySelectorAll('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"]'));
-                            for (const link of links) {
-                                const match = link.href.match(/\\/videos\\/(\\d+)/) || link.href.match(/\\/reel\\/(\\d+)/) || link.href.match(/[?&]v=(\\d+)/);
-                                if (match) return match[1];
-                            }
-                            // Check data attributes
-                            const vc = article.querySelector('div[data-video-id]');
-                            if (vc) return vc.getAttribute('data-video-id');
-                            return null;
-                        }""")
-                        
-                        if not video_id:
-                            print(f"  ⚠ Video element found but NO ID extracted. Saving debug HTML...")
-                            try:
-                                html_content = await article.inner_html()
-                                with open(f"debug_video_NO_ID_{i}.html", "w", encoding="utf-8") as f:
-                                    f.write(html_content)
-                            except: pass
-
-                        if video_id:
-                            print(f"  🎥 Video ID found: {video_id}")
-                            
-                            # Step 2: Extract direct URL via yt-dlp (Robust method)
-                            try:
-                                # Use yt-dlp to get the direct progressive MP4 URL
-                                # -g: get URL
-                                # -f "hd/sd/best": prefer HD, then SD, then best available single file
-                                cmd = ["yt-dlp", "-g", "-f", "hd/sd/best", f"https://www.facebook.com/watch/?v={video_id}"]
-                                
-                                # Run command with timeout
-                                output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=20).decode('utf-8').strip()
-                                
-                                # yt-dlp might return multiple lines (video+audio), we take the first valid one
-                                urls = output.split('\n')
-                                for url in urls:
-                                    if url.startswith('http') and '.mp4' in url:
-                                        video_url = url
-                                        break
-                                
-                                if video_url:
-                                    print(f"  ✓ Extracted direct video URL via yt-dlp")
-                                else:
-                                    # Fallback if no mp4 found in output
-                                    video_url = urls[0] if urls and urls[0].startswith('http') else None
-                                    if video_url: print(f"  ✓ Extracted video URL (non-mp4?) via yt-dlp")
-
-                            except Exception as e:
-                                print(f"  ⚠ yt-dlp extraction failed: {e}")
-                                video_url = None
-
-                            # Step 3: Fallback to watch permalink if yt-dlp failed
-                            if not video_url:
-                                video_url = f"https://www.facebook.com/watch/?v={video_id}"
-                                print(f"  ℹ️ Using watch permalink fallback")
-                        
-                        # Step 4: If no video ID found, try direct src (skip blob:)
-                        if not video_url:
-                            src = await video_element.get_attribute('src')
-                            if src and not src.startswith('blob:') and src.startswith('http'):
-                                video_url = src
-                        
-                        # Step 5: Extract video thumbnail/poster for RSS
-                        poster = await video_element.get_attribute('poster')
-                        if poster and poster.startswith('http'):
-                            image_url = poster
-                        else:
-                            # Look for thumbnail image near the video
-                            thumb = await article.query_selector('img[data-imgperflogname="feedImage"]')
-                            if thumb:
-                                image_url = await thumb.get_attribute('src')
+                    # Look for images in the article
+                    # Exclude profile pictures (usually small or have specific alt text) and emojis
+                    images = await article.query_selector_all('img')
                     
-                    # --- IMAGE DETECTION (only if NOT a video post) ---
-                    if media_type != 'video':
-                        # Strategy 1: Look for the specific feed image attribute
-                        feed_img = await article.query_selector('img[data-imgperflogname="feedImage"]')
-                        if feed_img:
-                            src = await feed_img.get_attribute('src')
-                            if src and src.startswith('http'):
-                                image_url = src
-                                media_type = 'image'
+                    for img in images:
+                        src = await img.get_attribute('src')
+                        if not src: continue
                         
-                        # Strategy 2: Look for images inside photo links
-                        if not image_url:
-                            photo_link = await article.query_selector('a[href*="/photo"] img, a[href*="/photos/"] img')
-                            if photo_link:
-                                src = await photo_link.get_attribute('src')
-                                if src and src.startswith('http'):
-                                    image_url = src
-                                    media_type = 'image'
+                        # Skip small icons/emojis/tracking pixels
+                        # Heuristic: valid post images usually have a distinct class or are within specific containers
+                        # Simplified filter based on URL patterns often seen for static assets/emojis
+                        if 'emoji.php' in src or 'rsrc.php' in src or 'static.xx' in src:
+                            continue
                         
-                        # Strategy 3: Find large images (skip profile pics, emojis, UI)
-                        if not image_url:
-                            images = await article.query_selector_all('img')
-                            for img in images:
-                                src = await img.get_attribute('src')
-                                if not src: continue
-                                
-                                # Skip non-http sources
-                                if not src.startswith('http'): continue
-                                
-                                # Skip UI/noise images with comprehensive filtering
-                                noise_patterns = [
-                                    'emoji.php', 'rsrc.php', 'static.xx', 'static.fb',
-                                    'p50x50', 's100x100', 's80x80', 's64x64', 's40x40',
-                                    's32x32', 'cp0_dst-jpg_s', '_s80x80',
-                                    'data:image/svg', 'platform-lookaside',
-                                    'safe_image.php'
-                                ]
-                                if any(x in src for x in noise_patterns):
-                                    continue
-                                
-                                # Check image dimensions - skip small images (profile pics, icons)
-                                try:
-                                    width = await img.get_attribute('width')
-                                    height = await img.get_attribute('height')
-                                    if width and height:
-                                        w, h = int(width), int(height)
-                                        if w < 100 or h < 100:  # Skip tiny images
-                                            continue
-                                except:
-                                    pass
-                                
-                                # Check if image is inside a profile pic container (SVG mask pattern) 
-                                parent_svg = await img.evaluate("el => !!el.closest('svg')")
-                                if parent_svg:
-                                    continue
-                                
-                                image_url = src
-                                media_type = 'image'
-                                break
+                        # Filter out SVG placeholders
+                        if src.startswith('data:image/svg'):
+                            continue
+                            
+                        # Skip profile pictures (scontent...p50x50, p100x100 etc usually indicate thumbnails)
+                        if 'p50x50' in src or 's100x100' in src:
+                             continue
+                             
+                        # Skip tiny images if possible (needs evaluation in browser context, but URL pattern helps)
+
+                        # Check if it's likely the main post image
+                        # For now, take the first substantial image found that isn't excluded
+                        image_url = src
+                        break
                         
                 except Exception as e:
-                    print(f"  ⚠ Error extracting media: {e}")
+                    print(f"⚠ Error extracting image: {e}")
 
                 # 4. Extract Timestamp
                 # Facebook shows relative times like "4d", "13h", "2 mins" etc.
@@ -575,21 +463,13 @@ class FacebookScraper:
                     'link': link or self.page_url,
                     'guid': link or f"{self.page_url}#{i}_{int(current_time.timestamp())}",
                     'pubDate': pub_date,
-                    'image': image_url,
-                    'video': video_url,
-                    'media_type': media_type
+                    'image': image_url
                 }
                 
                 posts.append(post_obj)
                 print(f"✓ Post {len(posts)}: {title}")
-                if media_type == 'video':
-                    print(f"  🎥 Video: {(video_url or 'none')[:80]}...")
-                    if image_url:
-                        print(f"  🖼️ Thumbnail: {image_url[:60]}...")
-                elif media_type == 'image':
-                    print(f"  🖼️ Image: {image_url[:80]}...")
-                else:
-                    print(f"  📝 Text-only post (no media)")
+                if image_url:
+                    print(f"  Image: {image_url[:50]}...")
                 
             except Exception as e:
                 print(f"⚠ Error extracting post {i}: {e}")
@@ -628,7 +508,7 @@ def generate_rss(posts, page_name, page_url, output='feed.xml'):
         
         fg = FeedGenerator()
         fg.id(page_url)
-        fg.title(page_name)
+        fg.title(f'{page_name} - Facebook Updates')
         fg.link(href=page_url, rel='alternate')
         fg.link(href=page_url, rel='self')
         fg.description(f'Unofficial RSS feed for {page_name}')
@@ -645,32 +525,8 @@ def generate_rss(posts, page_name, page_url, output='feed.xml'):
             fe.guid(post['guid'], permalink=False)
             fe.published(post['pubDate'])
             
-            if post.get('media_type') == 'video' and post.get('video'):
-                v_url = post['video']
-                is_watch_link = 'facebook.com/watch' in v_url
-                
-                if is_watch_link:
-                    # Watch permalink — use thumbnail as enclosure, link to video
-                    if post.get('image'):
-                        fe.enclosure(url=post['image'], type='image/jpeg', length='0')
-                    current_desc = fe.description()
-                    fe.description(f'{current_desc}<br/><br/>🎥 <a href="{v_url}">Watch Video on Facebook</a>')
-                    if post.get('image'):
-                        fe.description(f'{fe.description()}<br/><br/><a href="{v_url}"><img src="{post["image"]}" style="max-width:100%" alt="Video thumbnail"/></a>')
-                else:
-                    # Direct mp4 URL — use as enclosure with video player
-                    mime_type = 'video/mp4'
-                    if '.m3u8' in v_url:
-                        mime_type = 'application/x-mpegURL'
-                    fe.enclosure(url=v_url, type=mime_type, length='0')
-                    
-                    current_desc = fe.description()
-                    poster_attr = f' poster="{post["image"]}"' if post.get('image') else ''
-                    fe.description(f'{current_desc}<br/><br/><video controls width="100%"{poster_attr}><source src="{v_url}" type="{mime_type}">Your browser does not support the video tag.</video>')
-            elif post.get('media_type') == 'image' and post.get('image'):
+            if post.get('image'):
                 fe.enclosure(url=post['image'], type='image/jpeg', length='0')
-                current_desc = fe.description()
-                fe.description(f'{current_desc}<br/><br/><img src="{post["image"]}" style="max-width:100%"/>')
             
         fg.rss_file(output, pretty=True)
         print(f"\n✓ RSS feed generated: {output}")
