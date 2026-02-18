@@ -366,40 +366,38 @@ class FacebookScraper:
                             href = f"https://www.facebook.com{href}"
                         link = href.split('?')[0]
 
-                # 3. Extract Image
+                # 3. Extract Image & Video
                 image_url = None
+                video_url = None
                 try:
-                    # Look for images in the article
-                    # Exclude profile pictures (usually small or have specific alt text) and emojis
-                    images = await article.query_selector_all('img')
+                    # Look for videos first
+                    video_element = await article.query_selector('video')
+                    if video_element:
+                        video_url = await video_element.get_attribute('src')
+                        # Sometimes FB uses a different container for the source
+                        if not video_url:
+                            # Try to find a source tag if it's there
+                            source = await video_element.query_selector('source')
+                            if source:
+                                video_url = await source.get_attribute('src')
                     
+                    # Look for images
+                    images = await article.query_selector_all('img')
                     for img in images:
                         src = await img.get_attribute('src')
                         if not src: continue
                         
-                        # Skip small icons/emojis/tracking pixels
-                        # Heuristic: valid post images usually have a distinct class or are within specific containers
-                        # Simplified filter based on URL patterns often seen for static assets/emojis
-                        if 'emoji.php' in src or 'rsrc.php' in src or 'static.xx' in src:
+                        # Skip UI/noise images
+                        if any(x in src for x in ['emoji.php', 'rsrc.php', 'static.xx', 'p50x50', 's100x100']):
                             continue
-                        
-                        # Filter out SVG placeholders
                         if src.startswith('data:image/svg'):
                             continue
                             
-                        # Skip profile pictures (scontent...p50x50, p100x100 etc usually indicate thumbnails)
-                        if 'p50x50' in src or 's100x100' in src:
-                             continue
-                             
-                        # Skip tiny images if possible (needs evaluation in browser context, but URL pattern helps)
-
-                        # Check if it's likely the main post image
-                        # For now, take the first substantial image found that isn't excluded
                         image_url = src
                         break
                         
                 except Exception as e:
-                    print(f"⚠ Error extracting image: {e}")
+                    print(f"  ⚠ Error extracting media: {e}")
 
                 # 4. Extract Timestamp
                 # Facebook shows relative times like "4d", "13h", "2 mins" etc.
@@ -463,7 +461,8 @@ class FacebookScraper:
                     'link': link or self.page_url,
                     'guid': link or f"{self.page_url}#{i}_{int(current_time.timestamp())}",
                     'pubDate': pub_date,
-                    'image': image_url
+                    'image': image_url,
+                    'video': video_url
                 }
                 
                 posts.append(post_obj)
@@ -525,7 +524,14 @@ def generate_rss(posts, page_name, page_url, output='feed.xml'):
             fe.guid(post['guid'], permalink=False)
             fe.published(post['pubDate'])
             
-            if post.get('image'):
+            if post.get('video'):
+                # Prioritize video as enclosure if it exists
+                fe.enclosure(url=post['video'], type='video/mp4', length='0')
+                # If there's also an image, add it to description as a backup
+                if post.get('image'):
+                    current_desc = fe.description()
+                    fe.description(f'{current_desc}<br/><br/><img src="{post["image"]}" style="max-width:100%"/>')
+            elif post.get('image'):
                 fe.enclosure(url=post['image'], type='image/jpeg', length='0')
             
         fg.rss_file(output, pretty=True)
