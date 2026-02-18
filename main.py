@@ -369,73 +369,145 @@ class FacebookScraper:
                 # 3. Extract Image & Video
                 image_url = None
                 video_url = None
+                media_type = None  # 'video', 'image', or None
                 try:
-                    # Look for videos first
+                    # --- VIDEO DETECTION ---
                     video_element = await article.query_selector('video')
                     if video_element:
-                        # 1. Try to find a unique Video ID for THIS post
+                        media_type = 'video'
+                        
+                        # Step 1: Find video ID from links within this article
                         video_id = await article.evaluate("""(article) => {
-                            // Try multiple ways to find the video ID linked to this article
-                            const links = Array.from(article.querySelectorAll('a[href*="/videos/"], a[href*="/watch/"]'));
+                            const links = Array.from(article.querySelectorAll('a[href*="/videos/"], a[href*="/watch/"], a[href*="/reel/"]'));
                             for (const link of links) {
-                                const match = link.href.match(/\\/videos\\/(\\d+)/) || link.href.match(/v=(\\d+)/);
+                                const match = link.href.match(/\\/videos\\/(\\d+)/) || link.href.match(/\\/reel\\/(\\d+)/) || link.href.match(/[?&]v=(\\d+)/);
                                 if (match) return match[1];
                             }
-                            
-                            // Check for data attributes
-                            const videoContainer = article.querySelector('div[data-video-id]');
-                            if (videoContainer) return videoContainer.getAttribute('data-video-id');
-                            
+                            // Check data attributes
+                            const vc = article.querySelector('div[data-video-id]');
+                            if (vc) return vc.getAttribute('data-video-id');
                             return null;
                         }""")
                         
                         if video_id:
-                            # 2. Extract static URLs from the script tags linked to THIS video_id
-                            video_url = await page.evaluate(f"""(vId) => {{
-                                const scripts = Array.from(document.querySelectorAll('script'));
-                                for (const script of scripts) {{
-                                    const content = script.textContent;
-                                    if (content.includes(vId) && (content.includes('browser_native_sd_url') || content.includes('browser_native_hd_url'))) {{
-                                        // Find the block containing both the vId and the URL
-                                        // We look for the ID followed by the URL metadata
-                                        const idIdx = content.indexOf(vId);
-                                        const sub = content.substring(idIdx - 1000, idIdx + 10000);
-                                        
-                                        const hdMatch = sub.match(/"browser_native_hd_url":"([^"]+)"/);
-                                        const sdMatch = sub.match(/"browser_native_sd_url":"([^"]+)"/);
-                                        
-                                        const url = hdMatch ? hdMatch[1] : (sdMatch ? sdMatch[1] : null);
-                                        if (url) return url.replace(/\\\\/g, '');
-                                    }}
-                                }}
-                                return null;
-                            }}""", video_id)
-                        
-                        # 3. Fallback to direct src or source tags (likely blob, but worth a try)
-                        if not video_url:
-                            video_url = await video_element.get_attribute('src')
-                            if not video_url or video_url.startswith('blob:'):
-                                video_url = await video_element.evaluate("el => el.currentSrc")
-                                
-                            if not video_url or video_url.startswith('blob:'):
-                                source = await video_element.query_selector('source')
-                                if source:
-                                    video_url = await source.get_attribute('src')
-                    
-                    # Look for images
-                    images = await article.query_selector_all('img')
-                    for img in images:
-                        src = await img.get_attribute('src')
-                        if not src: continue
-                        
-                        # Skip UI/noise images
-                        if any(x in src for x in ['emoji.php', 'rsrc.php', 'static.xx', 'p50x50', 's100x100']):
-                            continue
-                        if src.startswith('data:image/svg'):
-                            continue
+                            print(f"  🎥 Video ID found: {video_id}")
                             
-                        image_url = src
-                        break
+                            # Step 2: Search ALL script tags for direct mp4 URLs tied to this video ID
+                            video_url = await page.evaluate("""(vId) => {
+                                const scripts = Array.from(document.querySelectorAll('script'));
+                                for (const script of scripts) {
+                                    const content = script.textContent;
+                                    if (!content || !content.includes(vId)) continue;
+                                    if (!content.includes('browser_native_sd_url') && !content.includes('browser_native_hd_url') && !content.includes('playable_url')) continue;
+                                    
+                                    // Search in a wide window around the video ID
+                                    const idIdx = content.indexOf(vId);
+                                    const searchStart = Math.max(0, idIdx - 5000);
+                                    const searchEnd = Math.min(content.length, idIdx + 20000);
+                                    const sub = content.substring(searchStart, searchEnd);
+                                    
+                                    // Try multiple URL patterns (Facebook changes these)
+                                    const patterns = [
+                                        /"browser_native_hd_url":"([^"]+)"/,
+                                        /"browser_native_sd_url":"([^"]+)"/,
+                                        /"playable_url_quality_hd":"([^"]+)"/,
+                                        /"playable_url":"([^"]+)"/
+                                    ];
+                                    
+                                    for (const pattern of patterns) {
+                                        const match = sub.match(pattern);
+                                        if (match) {
+                                            // Unescape the URL (Facebook escapes forward slashes)
+                                            let url = match[1].replace(/\\\\/g, '/').replace(/\\u0025/g, '%');
+                                            if (url.startsWith('http')) return url;
+                                        }
+                                    }
+                                }
+                                return null;
+                            }""", video_id)
+                            
+                            # Step 3: If no direct URL, build a Facebook watch permalink
+                            if not video_url:
+                                video_url = f"https://www.facebook.com/watch/?v={video_id}"
+                                print(f"  ℹ️ Using watch permalink as video URL")
+                            else:
+                                print(f"  ✓ Direct video URL found")
+                        
+                        # Step 4: If no video ID found, try direct src (skip blob:)
+                        if not video_url:
+                            src = await video_element.get_attribute('src')
+                            if src and not src.startswith('blob:') and src.startswith('http'):
+                                video_url = src
+                        
+                        # Step 5: Extract video thumbnail/poster for RSS
+                        poster = await video_element.get_attribute('poster')
+                        if poster and poster.startswith('http'):
+                            image_url = poster
+                        else:
+                            # Look for thumbnail image near the video
+                            thumb = await article.query_selector('img[data-imgperflogname="feedImage"]')
+                            if thumb:
+                                image_url = await thumb.get_attribute('src')
+                    
+                    # --- IMAGE DETECTION (only if NOT a video post) ---
+                    if media_type != 'video':
+                        # Strategy 1: Look for the specific feed image attribute
+                        feed_img = await article.query_selector('img[data-imgperflogname="feedImage"]')
+                        if feed_img:
+                            src = await feed_img.get_attribute('src')
+                            if src and src.startswith('http'):
+                                image_url = src
+                                media_type = 'image'
+                        
+                        # Strategy 2: Look for images inside photo links
+                        if not image_url:
+                            photo_link = await article.query_selector('a[href*="/photo"] img, a[href*="/photos/"] img')
+                            if photo_link:
+                                src = await photo_link.get_attribute('src')
+                                if src and src.startswith('http'):
+                                    image_url = src
+                                    media_type = 'image'
+                        
+                        # Strategy 3: Find large images (skip profile pics, emojis, UI)
+                        if not image_url:
+                            images = await article.query_selector_all('img')
+                            for img in images:
+                                src = await img.get_attribute('src')
+                                if not src: continue
+                                
+                                # Skip non-http sources
+                                if not src.startswith('http'): continue
+                                
+                                # Skip UI/noise images with comprehensive filtering
+                                noise_patterns = [
+                                    'emoji.php', 'rsrc.php', 'static.xx', 'static.fb',
+                                    'p50x50', 's100x100', 's80x80', 's64x64', 's40x40',
+                                    's32x32', 'cp0_dst-jpg_s', '_s80x80',
+                                    'data:image/svg', 'platform-lookaside',
+                                    'safe_image.php'
+                                ]
+                                if any(x in src for x in noise_patterns):
+                                    continue
+                                
+                                # Check image dimensions - skip small images (profile pics, icons)
+                                try:
+                                    width = await img.get_attribute('width')
+                                    height = await img.get_attribute('height')
+                                    if width and height:
+                                        w, h = int(width), int(height)
+                                        if w < 100 or h < 100:  # Skip tiny images
+                                            continue
+                                except:
+                                    pass
+                                
+                                # Check if image is inside a profile pic container (SVG mask pattern) 
+                                parent_svg = await img.evaluate("el => !!el.closest('svg')")
+                                if parent_svg:
+                                    continue
+                                
+                                image_url = src
+                                media_type = 'image'
+                                break
                         
                 except Exception as e:
                     print(f"  ⚠ Error extracting media: {e}")
@@ -503,13 +575,20 @@ class FacebookScraper:
                     'guid': link or f"{self.page_url}#{i}_{int(current_time.timestamp())}",
                     'pubDate': pub_date,
                     'image': image_url,
-                    'video': video_url
+                    'video': video_url,
+                    'media_type': media_type
                 }
                 
                 posts.append(post_obj)
                 print(f"✓ Post {len(posts)}: {title}")
-                if image_url:
-                    print(f"  Image: {image_url[:50]}...")
+                if media_type == 'video':
+                    print(f"  🎥 Video: {(video_url or 'none')[:80]}...")
+                    if image_url:
+                        print(f"  🖼️ Thumbnail: {image_url[:60]}...")
+                elif media_type == 'image':
+                    print(f"  🖼️ Image: {image_url[:80]}...")
+                else:
+                    print(f"  📝 Text-only post (no media)")
                 
             except Exception as e:
                 print(f"⚠ Error extracting post {i}: {e}")
@@ -565,19 +644,29 @@ def generate_rss(posts, page_name, page_url, output='feed.xml'):
             fe.guid(post['guid'], permalink=False)
             fe.published(post['pubDate'])
             
-            if post.get('video'):
-                # Prioritize video as enclosure if it exists
+            if post.get('media_type') == 'video' and post.get('video'):
                 v_url = post['video']
-                mime_type = 'video/mp4'
-                if '.m3u8' in v_url:
-                    mime_type = 'application/x-mpegURL'
+                is_watch_link = 'facebook.com/watch' in v_url
                 
-                fe.enclosure(url=v_url, type=mime_type, length='0')
-                
-                # Add a video player or link to description as well
-                current_desc = fe.description()
-                fe.description(f'{current_desc}<br/><br/><video controls width="100%" poster="{post.get("image", "")}"><source src="{v_url}" type="{mime_type}">Your browser does not support the video tag.</video>')
-            elif post.get('image'):
+                if is_watch_link:
+                    # Watch permalink — use thumbnail as enclosure, link to video
+                    if post.get('image'):
+                        fe.enclosure(url=post['image'], type='image/jpeg', length='0')
+                    current_desc = fe.description()
+                    fe.description(f'{current_desc}<br/><br/>🎥 <a href="{v_url}">Watch Video on Facebook</a>')
+                    if post.get('image'):
+                        fe.description(f'{fe.description()}<br/><br/><a href="{v_url}"><img src="{post["image"]}" style="max-width:100%" alt="Video thumbnail"/></a>')
+                else:
+                    # Direct mp4 URL — use as enclosure with video player
+                    mime_type = 'video/mp4'
+                    if '.m3u8' in v_url:
+                        mime_type = 'application/x-mpegURL'
+                    fe.enclosure(url=v_url, type=mime_type, length='0')
+                    
+                    current_desc = fe.description()
+                    poster_attr = f' poster="{post["image"]}"' if post.get('image') else ''
+                    fe.description(f'{current_desc}<br/><br/><video controls width="100%"{poster_attr}><source src="{v_url}" type="{mime_type}">Your browser does not support the video tag.</video>')
+            elif post.get('media_type') == 'image' and post.get('image'):
                 fe.enclosure(url=post['image'], type='image/jpeg', length='0')
                 current_desc = fe.description()
                 fe.description(f'{current_desc}<br/><br/><img src="{post["image"]}" style="max-width:100%"/>')
