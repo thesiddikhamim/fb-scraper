@@ -373,33 +373,54 @@ class FacebookScraper:
                     # Look for videos first
                     video_element = await article.query_selector('video')
                     if video_element:
-                        # 1. Try direct src or currentSrc
-                        video_url = await video_element.get_attribute('src')
-                        if not video_url or video_url.startswith('blob:'):
-                            video_url = await video_element.evaluate("el => el.currentSrc")
+                        # 1. Try to find a unique Video ID for THIS post
+                        video_id = await article.evaluate("""(article) => {
+                            // Try multiple ways to find the video ID linked to this article
+                            const links = Array.from(article.querySelectorAll('a[href*="/videos/"], a[href*="/watch/"]'));
+                            for (const link of links) {
+                                const match = link.href.match(/\\/videos\\/(\\d+)/) || link.href.match(/v=(\\d+)/);
+                                if (match) return match[1];
+                            }
+                            
+                            // Check for data attributes
+                            const videoContainer = article.querySelector('div[data-video-id]');
+                            if (videoContainer) return videoContainer.getAttribute('data-video-id');
+                            
+                            return null;
+                        }""")
                         
-                        # 2. If it's a blob or empty, look for metadata in the page source
-                        if not video_url or video_url.startswith('blob:'):
-                            # Try to find static URLs in the script tags of the page
-                            video_url = await page.evaluate("""() => {
+                        if video_id:
+                            # 2. Extract static URLs from the script tags linked to THIS video_id
+                            video_url = await page.evaluate(f"""(vId) => {{
                                 const scripts = Array.from(document.querySelectorAll('script'));
-                                for (const script of scripts) {
+                                for (const script of scripts) {{
                                     const content = script.textContent;
-                                    if (content.includes('browser_native_sd_url') || content.includes('browser_native_hd_url')) {
-                                        const sdMatch = content.match(/"browser_native_sd_url":"([^"]+)"/);
-                                        const hdMatch = content.match(/"browser_native_hd_url":"([^"]+)"/);
+                                    if (content.includes(vId) && (content.includes('browser_native_sd_url') || content.includes('browser_native_hd_url'))) {{
+                                        // Find the block containing both the vId and the URL
+                                        // We look for the ID followed by the URL metadata
+                                        const idIdx = content.indexOf(vId);
+                                        const sub = content.substring(idIdx - 1000, idIdx + 10000);
+                                        
+                                        const hdMatch = sub.match(/"browser_native_hd_url":"([^"]+)"/);
+                                        const sdMatch = sub.match(/"browser_native_sd_url":"([^"]+)"/);
+                                        
                                         const url = hdMatch ? hdMatch[1] : (sdMatch ? sdMatch[1] : null);
                                         if (url) return url.replace(/\\\\/g, '');
-                                    }
-                                }
+                                    }}
+                                }}
                                 return null;
-                            }""")
+                            }}""", video_id)
                         
-                        # 3. Fallback to source tags
-                        if not video_url or video_url.startswith('blob:'):
-                            source = await video_element.query_selector('source')
-                            if source:
-                                video_url = await source.get_attribute('src')
+                        # 3. Fallback to direct src or source tags (likely blob, but worth a try)
+                        if not video_url:
+                            video_url = await video_element.get_attribute('src')
+                            if not video_url or video_url.startswith('blob:'):
+                                video_url = await video_element.evaluate("el => el.currentSrc")
+                                
+                            if not video_url or video_url.startswith('blob:'):
+                                source = await video_element.query_selector('source')
+                                if source:
+                                    video_url = await source.get_attribute('src')
                     
                     # Look for images
                     images = await article.query_selector_all('img')
