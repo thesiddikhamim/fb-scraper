@@ -3,8 +3,8 @@ name: Update RSS Feed - Group 1
 on:
   # Run on a schedule (cron syntax: minute hour day month day-of-week)
   schedule:
-    # Run every 6 hours: at 00:00, 06:00, 12:00, and 18:00 UTC
-    - cron: '0 */6 * * *'
+    # Run at 7:00 AM and 5:00 PM BD time (1:00 AM and 11:00 AM UTC)
+    - cron: '0 1,11 * * *'
   
   # Allow manual triggering from GitHub Actions tab
   workflow_dispatch:
