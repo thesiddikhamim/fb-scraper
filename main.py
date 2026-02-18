@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import subprocess
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from feedgen.feed import FeedGenerator
@@ -389,49 +390,49 @@ class FacebookScraper:
                             return null;
                         }""")
                         
+                        if not video_id:
+                            print(f"  ⚠ Video element found but NO ID extracted. Saving debug HTML...")
+                            try:
+                                html_content = await article.inner_html()
+                                with open(f"debug_video_NO_ID_{i}.html", "w", encoding="utf-8") as f:
+                                    f.write(html_content)
+                            except: pass
+
                         if video_id:
                             print(f"  🎥 Video ID found: {video_id}")
                             
-                            # Step 2: Search ALL script tags for direct mp4 URLs tied to this video ID
-                            video_url = await page.evaluate("""(vId) => {
-                                const scripts = Array.from(document.querySelectorAll('script'));
-                                for (const script of scripts) {
-                                    const content = script.textContent;
-                                    if (!content || !content.includes(vId)) continue;
-                                    if (!content.includes('browser_native_sd_url') && !content.includes('browser_native_hd_url') && !content.includes('playable_url')) continue;
-                                    
-                                    // Search in a wide window around the video ID
-                                    const idIdx = content.indexOf(vId);
-                                    const searchStart = Math.max(0, idIdx - 5000);
-                                    const searchEnd = Math.min(content.length, idIdx + 20000);
-                                    const sub = content.substring(searchStart, searchEnd);
-                                    
-                                    // Try multiple URL patterns (Facebook changes these)
-                                    const patterns = [
-                                        /"browser_native_hd_url":"([^"]+)"/,
-                                        /"browser_native_sd_url":"([^"]+)"/,
-                                        /"playable_url_quality_hd":"([^"]+)"/,
-                                        /"playable_url":"([^"]+)"/
-                                    ];
-                                    
-                                    for (const pattern of patterns) {
-                                        const match = sub.match(pattern);
-                                        if (match) {
-                                            // Unescape the URL (Facebook escapes forward slashes)
-                                            let url = match[1].replace(/\\\\/g, '/').replace(/\\u0025/g, '%');
-                                            if (url.startsWith('http')) return url;
-                                        }
-                                    }
-                                }
-                                return null;
-                            }""", video_id)
-                            
-                            # Step 3: If no direct URL, build a Facebook watch permalink
+                            # Step 2: Extract direct URL via yt-dlp (Robust method)
+                            try:
+                                # Use yt-dlp to get the direct progressive MP4 URL
+                                # -g: get URL
+                                # -f "hd/sd/best": prefer HD, then SD, then best available single file
+                                cmd = ["yt-dlp", "-g", "-f", "hd/sd/best", f"https://www.facebook.com/watch/?v={video_id}"]
+                                
+                                # Run command with timeout
+                                output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=20).decode('utf-8').strip()
+                                
+                                # yt-dlp might return multiple lines (video+audio), we take the first valid one
+                                urls = output.split('\n')
+                                for url in urls:
+                                    if url.startswith('http') and '.mp4' in url:
+                                        video_url = url
+                                        break
+                                
+                                if video_url:
+                                    print(f"  ✓ Extracted direct video URL via yt-dlp")
+                                else:
+                                    # Fallback if no mp4 found in output
+                                    video_url = urls[0] if urls and urls[0].startswith('http') else None
+                                    if video_url: print(f"  ✓ Extracted video URL (non-mp4?) via yt-dlp")
+
+                            except Exception as e:
+                                print(f"  ⚠ yt-dlp extraction failed: {e}")
+                                video_url = None
+
+                            # Step 3: Fallback to watch permalink if yt-dlp failed
                             if not video_url:
                                 video_url = f"https://www.facebook.com/watch/?v={video_id}"
-                                print(f"  ℹ️ Using watch permalink as video URL")
-                            else:
-                                print(f"  ✓ Direct video URL found")
+                                print(f"  ℹ️ Using watch permalink fallback")
                         
                         # Step 4: If no video ID found, try direct src (skip blob:)
                         if not video_url:
