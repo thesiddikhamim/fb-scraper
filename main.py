@@ -373,10 +373,30 @@ class FacebookScraper:
                     # Look for videos first
                     video_element = await article.query_selector('video')
                     if video_element:
+                        # 1. Try direct src or currentSrc
                         video_url = await video_element.get_attribute('src')
-                        # Sometimes FB uses a different container for the source
-                        if not video_url:
-                            # Try to find a source tag if it's there
+                        if not video_url or video_url.startswith('blob:'):
+                            video_url = await video_element.evaluate("el => el.currentSrc")
+                        
+                        # 2. If it's a blob or empty, look for metadata in the page source
+                        if not video_url or video_url.startswith('blob:'):
+                            # Try to find static URLs in the script tags of the page
+                            video_url = await page.evaluate("""() => {
+                                const scripts = Array.from(document.querySelectorAll('script'));
+                                for (const script of scripts) {
+                                    const content = script.textContent;
+                                    if (content.includes('browser_native_sd_url') || content.includes('browser_native_hd_url')) {
+                                        const sdMatch = content.match(/"browser_native_sd_url":"([^"]+)"/);
+                                        const hdMatch = content.match(/"browser_native_hd_url":"([^"]+)"/);
+                                        const url = hdMatch ? hdMatch[1] : (sdMatch ? sdMatch[1] : null);
+                                        if (url) return url.replace(/\\\\/g, '');
+                                    }
+                                }
+                                return null;
+                            }""")
+                        
+                        # 3. Fallback to source tags
+                        if not video_url or video_url.startswith('blob:'):
                             source = await video_element.query_selector('source')
                             if source:
                                 video_url = await source.get_attribute('src')
@@ -526,13 +546,20 @@ def generate_rss(posts, page_name, page_url, output='feed.xml'):
             
             if post.get('video'):
                 # Prioritize video as enclosure if it exists
-                fe.enclosure(url=post['video'], type='video/mp4', length='0')
-                # If there's also an image, add it to description as a backup
-                if post.get('image'):
-                    current_desc = fe.description()
-                    fe.description(f'{current_desc}<br/><br/><img src="{post["image"]}" style="max-width:100%"/>')
+                v_url = post['video']
+                mime_type = 'video/mp4'
+                if '.m3u8' in v_url:
+                    mime_type = 'application/x-mpegURL'
+                
+                fe.enclosure(url=v_url, type=mime_type, length='0')
+                
+                # Add a video player or link to description as well
+                current_desc = fe.description()
+                fe.description(f'{current_desc}<br/><br/><video controls width="100%" poster="{post.get("image", "")}"><source src="{v_url}" type="{mime_type}">Your browser does not support the video tag.</video>')
             elif post.get('image'):
                 fe.enclosure(url=post['image'], type='image/jpeg', length='0')
+                current_desc = fe.description()
+                fe.description(f'{current_desc}<br/><br/><img src="{post["image"]}" style="max-width:100%"/>')
             
         fg.rss_file(output, pretty=True)
         print(f"\n✓ RSS feed generated: {output}")
