@@ -258,23 +258,93 @@
             const container = document.getElementById('feeds-container');
             
             try {
-                const response = await fetch('accounts.json');
-                if (!response.ok) {
-                    throw new Error('Failed to load accounts.json');
+                // 1. Fetch all accounts from accounts_1.json, accounts_2.json, etc.
+                const allAccounts = [];
+                let fileIndex = 1;
+                let hasMoreFiles = true;
+
+                while (hasMoreFiles) {
+                    try {
+                        const response = await fetch(`accounts_${fileIndex}.json`);
+                        if (response.ok) {
+                            const accounts = await response.json();
+                            allAccounts.push(...accounts);
+                            fileIndex++;
+                        } else {
+                            hasMoreFiles = false;
+                        }
+                    } catch (e) {
+                        hasMoreFiles = false;
+                    }
+                    // Safety break
+                    if (fileIndex > 10) break;
                 }
+
+                // Also check the main accounts.json if it exists and hasn't been added
+                try {
+                    const response = await fetch('accounts.json');
+                    if (response.ok) {
+                        const accounts = await response.json();
+                        accounts.forEach(acc => {
+                            if (!allAccounts.find(a => a.filename === acc.filename)) {
+                                allAccounts.push(acc);
+                            }
+                        });
+                    }
+                } catch (e) {}
+
+                // 2. Fetch list of files in feeds/ directory
+                let feedFiles = [];
+                try {
+                    const apiResponse = await fetch(`https://api.github.com/repos/${GITHUB_USERNAME}/${REPO_NAME}/contents/feeds`);
+                    if (apiResponse.ok) {
+                        const contents = await apiResponse.json();
+                        feedFiles = contents
+                            .filter(file => file.name.endsWith('.xml'))
+                            .map(file => file.name.replace('.xml', ''));
+                    }
+                } catch (e) {
+                    console.warn('Could not fetch feeds list from GitHub API:', e);
+                }
+
+                if (allAccounts.length === 0 && feedFiles.length === 0) {
+                    container.innerHTML = '<div class="error">No feeds configured or found.</div>';
+                    return;
+                }
+
+                // 3. Merge data: prioritize JSON info, but include all found feed files
+                const finalFeeds = [];
                 
-                const accounts = await response.json();
-                
-                if (accounts.length === 0) {
-                    container.innerHTML = '<div class="error">No feeds configured yet.</div>';
+                // Add accounts from JSON that have matching feed files (or just all accounts)
+                allAccounts.forEach(account => {
+                    finalFeeds.push({
+                        name: account.name,
+                        filename: account.filename,
+                        url: account.url
+                    });
+                });
+
+                // Add feed files that weren't in JSON
+                feedFiles.forEach(filename => {
+                    if (!finalFeeds.find(f => f.filename === filename)) {
+                        finalFeeds.push({
+                            name: filename.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '),
+                            filename: filename,
+                            url: '#'
+                        });
+                    }
+                });
+
+                if (finalFeeds.length === 0) {
+                    container.innerHTML = '<div class="error">No feeds found.</div>';
                     return;
                 }
 
                 const feedsGrid = document.createElement('div');
                 feedsGrid.className = 'feeds-grid';
 
-                accounts.forEach((account, index) => {
-                    const feedUrl = `${BASE_URL}${account.filename}.xml`;
+                finalFeeds.forEach((feed, index) => {
+                    const feedUrl = `${BASE_URL}${feed.filename}.xml`;
                     
                     const card = document.createElement('div');
                     card.className = 'feed-card';
@@ -283,7 +353,7 @@
                     card.innerHTML = `
                         <div class="feed-header">
                             <div class="feed-icon">📰</div>
-                            <div class="feed-name">${account.name}</div>
+                            <div class="feed-name">${feed.name}</div>
                         </div>
                         <div class="feed-url-container">
                             <div class="feed-url" title="${feedUrl}">${feedUrl}</div>
@@ -306,7 +376,7 @@
                     <div class="error">
                         <strong>Error:</strong> ${error.message}
                         <br><br>
-                        Make sure accounts.json exists and is properly formatted.
+                        Make sure the account files exist and are properly formatted.
                     </div>
                 `;
             }
