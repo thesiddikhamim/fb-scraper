@@ -527,7 +527,7 @@ def generate_rss(posts, page_name, page_url, output='feed.xml'):
         
         fg = FeedGenerator()
         fg.id(page_url)
-        fg.title(f'{page_name} - Facebook Updates')
+        fg.title(page_name)
         fg.link(href=page_url, rel='alternate')
         fg.link(href=page_url, rel='self')
         fg.description(f'Unofficial RSS feed for {page_name}')
